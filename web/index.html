@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Photo Browser</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="toolbar">
+      <h1>Photo Browser</h1>
+      <div class="mode-tabs">
+        <button id="modeCategory" class="tab active" type="button">By Category</button>
+        <button id="modeCluster"  class="tab"        type="button">By Cluster</button>
+      </div>
+    </header>
+
+    <!-- Category mode controls -->
+    <section id="categoryControls" class="controls-panel">
+      <div class="panel-header">
+        <span class="hint">Select up to 3 categories — photos must belong to all selected</span>
+        <span id="selectedCount" class="badge">0 selected</span>
+      </div>
+      <div id="categoryList" class="category-grid"></div>
+    </section>
+
+    <!-- Cluster mode controls -->
+    <section id="clusterControls" class="controls-panel hidden">
+      <div class="cluster-row">
+        <label for="clusterSelect">Cluster</label>
+        <select id="clusterSelect"></select>
+      </div>
+      <div class="cluster-row">
+        <label for="clusterDesc">Name</label>
+        <input id="clusterDesc" type="text" placeholder="Cluster description" />
+        <button id="saveClusterBtn" type="button">Save</button>
+        <span id="saveStatus" class="save-status"></span>
+      </div>
+    </section>
+
+    <!-- Folder filter — always visible -->
+    <section id="folderControls" class="controls-panel filter-panel">
+      <div class="cluster-row">
+        <label for="folderSelect">Folder</label>
+        <select id="folderSelect">
+          <option value="">All folders</option>
+        </select>
+        <span id="folderCount" class="badge hidden"></span>
+      </div>
+    </section>
+
+    <!-- Playlist panel — always visible -->
+    <section id="playlistPanel" class="controls-panel">
+      <div class="cluster-row">
+        <label for="playlistSelect">Playlist</label>
+        <select id="playlistSelect">
+          <option value="">— none —</option>
+        </select>
+        <span id="playlistPhotoCnt" class="badge hidden">0 photos</span>
+        <button id="newPlaylistBtn"       type="button">New</button>
+        <button id="modifyPlaylistBtn"    type="button" disabled>Modify</button>
+        <button id="deletePlaylistBtn"    type="button" class="btn-danger" disabled>Delete</button>
+        <button id="showPlaylistBtn"      type="button" disabled>Show</button>
+        <button id="slideshowPlaylistBtn" type="button" disabled>Slideshow</button>
+      </div>
+      <div id="playlistHint" class="playlist-hint hidden">
+        Right-click any photo or press <kbd>P</kbd> in the lightbox to add to this playlist
+      </div>
+    </section>
+
+    <p id="status" class="status">Loading…</p>
+    <section id="grid" class="grid"></section>
+    <div class="actions">
+      <button id="loadMoreBtn" type="button" disabled>Load 50 more</button>
+    </div>
+  </main>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="lightbox hidden">
+    <button id="prevPhoto"     class="nav-btn prev-btn" type="button">&#8249;</button>
+    <img    id="lightboxImage" src="" alt="Full size photo" />
+    <button id="nextPhoto"     class="nav-btn next-btn" type="button">&#8250;</button>
+    <button id="closeLightbox" class="close-btn"        type="button">&#x2715;</button>
+    <div id="zoomHint" class="zoom-hint">Ctrl + scroll to zoom · P to add to playlist</div>
+  </div>
+
+  <!-- Context menu -->
+  <div id="contextMenu" class="context-menu hidden"></div>
+
+  <!-- New playlist dialog -->
+  <div id="newPlaylistOverlay" class="dialog-overlay hidden">
+    <div class="dialog-box">
+      <div class="dialog-header">
+        <h2>New Playlist</h2>
+        <button id="closeNewPlaylistDialog" class="close-btn-sm" type="button">&#x2715;</button>
+      </div>
+      <input id="newPlaylistName" type="text" class="dialog-input" placeholder="Playlist name" />
+      <div class="dialog-actions">
+        <button id="cancelNewPlaylist"  type="button" class="btn-secondary">Cancel</button>
+        <button id="confirmNewPlaylist" type="button">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Playlist show modal -->
+  <div id="playlistModalOverlay" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2 id="playlistModalTitle">Playlist</h2>
+        <button id="closePlaylistModal" class="close-btn-sm" type="button">&#x2715;</button>
+      </div>
+      <p class="hint">Drag thumbnails to reorder &middot; Hover and click <strong>&#x2715;</strong> or right-click to remove</p>
+      <p id="playlistEmpty" class="status hidden">No photos in this playlist yet. Browse and add photos using right-click or press P in the lightbox.</p>
+      <div id="playlistGrid" class="grid"></div>
+    </div>
+  </div>
+
+  <!-- Slideshow overlay -->
+  <div id="slideshowOverlay" class="slideshow-overlay hidden">
+    <img id="slideshowImage" src="" alt="Slideshow" />
+    <button id="closeSlideshowBtn" class="ss-close-btn" type="button">&#x2715;</button>
+    <button id="ssPrevBtn" class="nav-btn prev-btn" type="button">&#8249;</button>
+    <button id="ssNextBtn" class="nav-btn next-btn" type="button">&#8250;</button>
+    <div class="ss-controls">
+      <button id="ssPauseBtn" type="button">Pause</button>
+      <label class="ss-speed-label">
+        Speed:
+        <input id="ssSpeedSlider" type="range" min="1" max="10" value="3" step="1" />
+        <span id="ssSpeedVal">3s</span>
+      </label>
+      <span id="ssCounter" class="badge">1 / 1</span>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
