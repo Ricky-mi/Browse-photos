@@ -13,6 +13,7 @@
       <div class="mode-tabs">
         <button id="modeCategory" class="tab active" type="button">By Category</button>
         <button id="modeCluster"  class="tab"        type="button">By Cluster</button>
+        <button id="modeSearch"   class="tab"        type="button">Search</button>
       </div>
     </header>
 
@@ -23,6 +24,19 @@
         <span id="selectedCount" class="badge">0 selected</span>
       </div>
       <div id="categoryList" class="category-grid"></div>
+    </section>
+
+    <!-- Search mode controls -->
+    <section id="searchControls" class="controls-panel hidden">
+      <div class="search-input-row">
+        <textarea id="searchQuery" class="search-textarea" maxlength="600"
+                  placeholder="Describe the photos you're looking for…" rows="2"></textarea>
+        <button id="searchBtn" type="button">Search</button>
+      </div>
+      <div class="search-meta">
+        <span id="searchCharCount" class="hint">0 / 600</span>
+        <span class="hint">Enter to search &middot; Shift+Enter for new line</span>
+      </div>
     </section>
 
     <!-- Cluster mode controls -->

@@ -1,8 +1,13 @@
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const modeCategoryBtn      = document.getElementById("modeCategory");
 const modeClusterBtn       = document.getElementById("modeCluster");
+const modeSearchBtn        = document.getElementById("modeSearch");
 const categoryControls     = document.getElementById("categoryControls");
 const clusterControls      = document.getElementById("clusterControls");
+const searchControls       = document.getElementById("searchControls");
+const searchQueryEl        = document.getElementById("searchQuery");
+const searchBtn            = document.getElementById("searchBtn");
+const searchCharCount      = document.getElementById("searchCharCount");
 const categoryList         = document.getElementById("categoryList");
 const selectedCount        = document.getElementById("selectedCount");
 const clusterSelect        = document.getElementById("clusterSelect");
@@ -65,6 +70,14 @@ let hasMore            = false;
 let photoList          = [];
 let currentPhotoIndex  = -1;
 let lightboxScale      = 1;
+let lightboxTranslateX = 0;
+let lightboxTranslateY = 0;
+let lbDragging         = false;
+let lbDragStartX       = 0;
+let lbDragStartY       = 0;
+let lbDragStartTX      = 0;
+let lbDragStartTY      = 0;
+let lbDragMoved        = false;
 let saveTimer          = null;
 
 // Playlist state
@@ -560,7 +573,7 @@ slideshowOverlay.addEventListener("keydown", (e) => {
 
 // ── Folder filter ─────────────────────────────────────────────────────────────
 async function loadFolders() {
-  const qs = primaryQS();
+  const qs = mode === "search" ? new URLSearchParams() : primaryQS();
   const resp = await fetch(`/api/folders?${qs}`).catch(() => null);
   if (!resp || !resp.ok) return;
   const data = await resp.json();
@@ -568,9 +581,7 @@ async function loadFolders() {
   const paths  = data.map((f) => f.path);
   const labels = stripPrefix(paths);
 
-  const prevFolder = selectedFolder;
-  const stillValid = data.some((f) => f.path === prevFolder);
-  if (!stillValid) selectedFolder = "";
+  const inResults = !selectedFolder || data.some((f) => f.path === selectedFolder);
 
   folderSelect.innerHTML = '<option value="">All folders</option>';
   data.forEach((f, i) => {
@@ -580,6 +591,15 @@ async function loadFolders() {
     opt.title = f.path;
     folderSelect.appendChild(opt);
   });
+
+  if (selectedFolder && !inResults) {
+    const opt = document.createElement("option");
+    opt.value = selectedFolder;
+    opt.textContent = `${selectedFolder.split("/").filter(Boolean).pop() ?? selectedFolder} (0)`;
+    opt.title = selectedFolder;
+    folderSelect.appendChild(opt);
+  }
+
   folderSelect.value = selectedFolder;
 
   if (data.length > 0) {
@@ -647,7 +667,6 @@ async function loadPhotos({ reset = false } = {}) {
 
   loadMoreBtn.disabled = true;
 
-  const qs = primaryQS();
   if (mode === "category" && selectedCategories.size === 0 && !selectedFolder) {
     statusEl.textContent = "Select at least one category.";
     return;
@@ -656,6 +675,21 @@ async function loadPhotos({ reset = false } = {}) {
     statusEl.textContent = "No clusters available.";
     return;
   }
+  if (mode === "search" && !searchQueryEl.value.trim()) {
+    statusEl.textContent = "Enter a description and click Search.";
+    return;
+  }
+
+  const qs = new URLSearchParams();
+  let apiUrl;
+
+  if (mode === "search") {
+    apiUrl = "/api/search";
+    qs.set("query", searchQueryEl.value.trim());
+  } else {
+    apiUrl = "/api/photos";
+    for (const [k, v] of primaryQS()) qs.append(k, v);
+  }
 
   qs.set("offset", String(nextOffset));
   qs.set("limit", "50");
@@ -663,7 +697,7 @@ async function loadPhotos({ reset = false } = {}) {
 
   statusEl.textContent = "Loading…";
 
-  const resp = await fetch(`/api/photos?${qs}`);
+  const resp = await fetch(`${apiUrl}?${qs}`);
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
     statusEl.textContent = `Error: ${err.error || resp.statusText}`;
@@ -688,6 +722,9 @@ async function loadPhotos({ reset = false } = {}) {
     parts.push([...selectedCategories].join(" + "));
   } else if (mode === "cluster") {
     parts.push(clusterSelect.options[clusterSelect.selectedIndex]?.text ?? "");
+  } else if (mode === "search") {
+    const q = searchQueryEl.value.trim();
+    parts.push(`"${q.length > 60 ? q.slice(0, 60) + "…" : q}"`);
   }
   if (selectedFolder) {
     parts.push(folderSelect.options[folderSelect.selectedIndex]?.text ?? selectedFolder);
@@ -696,20 +733,31 @@ async function loadPhotos({ reset = false } = {}) {
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
+function applyLightboxTransform() {
+  lightboxImage.style.transform =
+    `translate(${lightboxTranslateX}px, ${lightboxTranslateY}px) scale(${lightboxScale})`;
+}
+
 function openLightbox(index) {
-  currentPhotoIndex             = index;
-  lightboxScale                 = 1;
-  lightboxImage.style.transform = "scale(1)";
-  lightboxImage.src             = photoList[index].image_url;
+  currentPhotoIndex  = index;
+  lightboxScale      = 1;
+  lightboxTranslateX = 0;
+  lightboxTranslateY = 0;
+  lightboxImage.style.cursor = "";
+  applyLightboxTransform();
+  lightboxImage.src = photoList[index].image_url;
   lightbox.classList.remove("hidden");
   updateNavButtons();
 }
 
 function closeLightboxFn() {
   lightbox.classList.add("hidden");
-  lightboxImage.src             = "";
-  lightboxImage.style.transform = "scale(1)";
-  lightboxScale                 = 1;
+  lightboxImage.src  = "";
+  lightboxScale      = 1;
+  lightboxTranslateX = 0;
+  lightboxTranslateY = 0;
+  lightboxImage.style.cursor = "";
+  applyLightboxTransform();
 }
 
 function updateNavButtons() {
@@ -733,7 +781,10 @@ async function navigateNext() {
 prevBtn.addEventListener("click", (e) => { e.stopPropagation(); navigatePrev(); });
 nextBtn.addEventListener("click", (e) => { e.stopPropagation(); navigateNext(); });
 
-lightbox.addEventListener("click", (e) => { if (e.target === lightbox) closeLightboxFn(); });
+lightbox.addEventListener("click", (e) => {
+  if (lbDragMoved) { lbDragMoved = false; return; }
+  if (e.target === lightbox) closeLightboxFn();
+});
 closeLightbox.addEventListener("click", closeLightboxFn);
 
 // Right-click on lightbox image → add to playlist
@@ -775,8 +826,44 @@ lightbox.addEventListener("wheel", (e) => {
   lightboxScale = e.deltaY < 0
     ? Math.min(SCALE_MAX, lightboxScale * SCALE_FACTOR)
     : Math.max(SCALE_MIN, lightboxScale / SCALE_FACTOR);
-  lightboxImage.style.transform = `scale(${lightboxScale})`;
+  if (lightboxScale <= 1) {
+    lightboxTranslateX = 0;
+    lightboxTranslateY = 0;
+    lightboxImage.style.cursor = "";
+  } else {
+    lightboxImage.style.cursor = "grab";
+  }
+  applyLightboxTransform();
 }, { passive: false });
+
+// Lightbox pan via drag when zoomed in
+lightboxImage.addEventListener("mousedown", (e) => {
+  if (lightboxScale <= 1 || e.button !== 0) return;
+  e.preventDefault();
+  lbDragging   = true;
+  lbDragMoved  = false;
+  lbDragStartX = e.clientX;
+  lbDragStartY = e.clientY;
+  lbDragStartTX = lightboxTranslateX;
+  lbDragStartTY = lightboxTranslateY;
+  lightboxImage.style.cursor = "grabbing";
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (!lbDragging) return;
+  const dx = e.clientX - lbDragStartX;
+  const dy = e.clientY - lbDragStartY;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) lbDragMoved = true;
+  lightboxTranslateX = lbDragStartTX + dx;
+  lightboxTranslateY = lbDragStartTY + dy;
+  applyLightboxTransform();
+});
+
+document.addEventListener("mouseup", () => {
+  if (!lbDragging) return;
+  lbDragging = false;
+  lightboxImage.style.cursor = lightboxScale > 1 ? "grab" : "";
+});
 
 // ── Category mode ─────────────────────────────────────────────────────────────
 async function loadCategories() {
@@ -910,30 +997,62 @@ saveClusterBtn.addEventListener("click", async () => {
 // ── Mode switching ────────────────────────────────────────────────────────────
 async function switchMode(newMode) {
   mode = newMode;
-  const isCat = mode === "category";
+  const isCat     = newMode === "category";
+  const isCluster = newMode === "cluster";
+  const isSearch  = newMode === "search";
 
   modeCategoryBtn.classList.toggle("active", isCat);
-  modeClusterBtn.classList.toggle("active", !isCat);
+  modeClusterBtn.classList.toggle("active",  isCluster);
+  modeSearchBtn.classList.toggle("active",   isSearch);
   categoryControls.classList.toggle("hidden", !isCat);
-  clusterControls.classList.toggle("hidden", isCat);
+  clusterControls.classList.toggle("hidden",  !isCluster);
+  searchControls.classList.toggle("hidden",   !isSearch);
 
+  selectedFolder = "";
   photoList  = [];
   nextOffset = 0;
   hasMore    = false;
   grid.innerHTML = "";
   loadMoreBtn.disabled = true;
-  statusEl.textContent = "Loading…";
 
   if (isCat) {
+    statusEl.textContent = "Loading…";
     await loadFolders();
     loadPhotos({ reset: true });
-  } else {
+  } else if (isCluster) {
+    statusEl.textContent = "Loading…";
     loadClusters();
+  } else {
+    statusEl.textContent = "Enter a description and click Search.";
+    await loadFolders();
   }
 }
 
 modeCategoryBtn.addEventListener("click", () => { if (mode !== "category") switchMode("category"); });
 modeClusterBtn.addEventListener("click",  () => { if (mode !== "cluster")  switchMode("cluster"); });
+modeSearchBtn.addEventListener("click",   () => { if (mode !== "search")   switchMode("search"); });
+
+// ── Search ────────────────────────────────────────────────────────────────────
+searchQueryEl.addEventListener("input", () => {
+  searchCharCount.textContent = `${searchQueryEl.value.length} / 600`;
+});
+
+searchQueryEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    searchBtn.click();
+  }
+});
+
+searchBtn.addEventListener("click", async () => {
+  const q = searchQueryEl.value.trim();
+  if (!q) { searchQueryEl.focus(); return; }
+  searchBtn.disabled = true;
+  searchBtn.textContent = "Searching…";
+  await loadPhotos({ reset: true });
+  searchBtn.disabled = false;
+  searchBtn.textContent = "Search";
+});
 
 // ── Pagination ────────────────────────────────────────────────────────────────
 loadMoreBtn.addEventListener("click", () => { if (hasMore) loadPhotos({ reset: false }); });

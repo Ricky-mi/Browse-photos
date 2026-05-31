@@ -45,7 +45,7 @@ body {
   transition: background 0.15s, color 0.15s;
 }
 
-.tab:first-child { border-right: 1px solid #2563eb; }
+.tab:not(:last-child) { border-right: 1px solid #2563eb; }
 
 .tab.active {
   background: #2563eb;
@@ -122,6 +122,37 @@ body {
 .cat-chip.disabled {
   opacity: 0.38;
   cursor: not-allowed;
+}
+
+/* ── Search controls ─────────────────────────────────────────────────────────── */
+.search-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.search-textarea {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 58px;
+  line-height: 1.5;
+}
+
+.search-textarea:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px #bfdbfe;
+}
+
+.search-meta {
+  display: flex;
+  gap: 16px;
+  margin-top: 6px;
 }
 
 /* ── Cluster controls ────────────────────────────────────────────────────────── */

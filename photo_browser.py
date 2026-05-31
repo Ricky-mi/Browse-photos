@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,36 @@ CATEGORY_LABELS = [
 ]
 
 app = Flask(__name__, static_folder="web", static_url_path="")
+
+# ── Lazy CLIP loader ──────────────────────────────────────────────────────────
+_clip_lock      = threading.Lock()
+_clip_model     = None
+_clip_processor = None
+
+
+def _load_clip():
+    global _clip_model, _clip_processor
+    with _clip_lock:
+        if _clip_model is None:
+            try:
+                from transformers import CLIPModel, CLIPProcessor  # noqa: PLC0415
+                _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+                _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+                _clip_model.eval()
+            except Exception as exc:
+                raise RuntimeError(f"Failed to load CLIP model: {exc}") from exc
+    return _clip_model, _clip_processor
+
+
+def _embed_text(text: str) -> list[float]:
+    import torch  # noqa: PLC0415
+    model, processor = _load_clip()
+    inputs = processor(text=[text], return_tensors="pt", padding=True, truncation=True)
+    with torch.no_grad():
+        output = model.get_text_features(**inputs)
+    features = output.pooler_output if hasattr(output, "pooler_output") else output
+    features = features / features.norm(dim=-1, keepdim=True)
+    return features.cpu().numpy()[0].tolist()
 
 
 def get_db_url() -> str:
@@ -62,6 +93,26 @@ def init_db() -> None:
         """)
         conn.commit()
 
+    # Face recognition tables — may fail if photo_embeddings doesn't exist yet
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS known_people (
+                    id            SERIAL PRIMARY KEY,
+                    name          TEXT NOT NULL UNIQUE,
+                    reference_dir TEXT,
+                    photo_count   INTEGER DEFAULT 0
+                )
+            """)
+            cur.execute(
+                "ALTER TABLE photo_embeddings "
+                "ADD COLUMN IF NOT EXISTS person_names TEXT[]"
+            )
+            conn.commit()
+    except Exception as _fe:
+        import sys
+        print(f"Face recognition schema init (non-fatal): {_fe}", file=sys.stderr)
+
 
 try:
     init_db()
@@ -80,11 +131,13 @@ def _build_items(rows: list) -> list[dict]:
             {"name": row[4], "score": float(row[5]) if row[5] is not None else None},
             {"name": row[6], "score": float(row[7]) if row[7] is not None else None},
         ]
+        person_names = list(row[8]) if len(row) > 8 and row[8] else []
         items.append({
             "id": photo_id,
             "file_path": file_path,
             "file_name": Path(file_path).name,
             "categories": [c for c in cats if c["name"]],
+            "person_names": person_names,
             "thumbnail_url": f"/image?id={photo_id}&thumb=1",
             "image_url": f"/image?id={photo_id}",
         })
@@ -139,6 +192,19 @@ def clusters() -> Any:
     return jsonify([{"id": int(r[0]), "description": r[1], "count": int(r[2])} for r in rows])
 
 
+@app.get("/api/people")
+def people() -> Any:
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, photo_count FROM known_people ORDER BY name"
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return jsonify([])
+    return jsonify([{"name": r[0], "count": int(r[1])} for r in rows])
+
+
 @app.patch("/api/clusters/<int:cluster_id>")
 def update_cluster(cluster_id: int) -> Any:
     data = request.get_json(silent=True) or {}
@@ -156,7 +222,12 @@ def update_cluster(cluster_id: int) -> Any:
     return jsonify({"id": cluster_id, "description": description})
 
 
-def _photo_where(cluster_id_raw: str, cat_list: list[str], folder: str) -> tuple[str, list]:
+def _photo_where(
+    cluster_id_raw: str,
+    cat_list: list[str],
+    folder: str,
+    person: str = "",
+) -> tuple[str, list]:
     """Build a (WHERE clause, params list) for the photos query."""
     clauses: list[str] = []
     params: list = []
@@ -164,6 +235,9 @@ def _photo_where(cluster_id_raw: str, cat_list: list[str], folder: str) -> tuple
     if cluster_id_raw:
         clauses.append("cluster_id = %s")
         params.append(int(cluster_id_raw))
+    elif person:
+        clauses.append("%s = ANY(person_names)")
+        params.append(person)
     else:
         for cat in cat_list:
             clauses.append("(%s = ANY(ARRAY[category_1, category_2, category_3]))")
@@ -182,8 +256,9 @@ def folders() -> Any:
     cluster_id_raw = request.args.get("cluster_id", "").strip()
     cat_list = [c.strip() for c in request.args.getlist("categories") if c.strip()]
     cat_list = [c for c in cat_list if c in CATEGORY_LABELS]
+    person = request.args.get("person", "").strip()
 
-    where, params = _photo_where(cluster_id_raw, cat_list, "")
+    where, params = _photo_where(cluster_id_raw, cat_list, "", person)
     where_sql = f"WHERE {where}" if where else ""
 
     with get_conn() as conn, conn.cursor() as cur:
@@ -210,18 +285,21 @@ def photos() -> Any:
 
     cluster_id_raw = request.args.get("cluster_id", "").strip()
     cat_list = [c.strip() for c in request.args.getlist("categories") if c.strip()]
+    person = request.args.get("person", "").strip()
 
     if cluster_id_raw:
         if not cluster_id_raw.isdigit():
             return jsonify({"error": "Invalid cluster_id"}), 400
+    elif person:
+        pass  # valid filter — no extra validation needed
     elif cat_list:
         if any(c not in CATEGORY_LABELS for c in cat_list):
             return jsonify({"error": "Unknown category"}), 400
     else:
         if not folder:
-            return jsonify({"error": "Provide 'categories', 'cluster_id', or 'folder'"}), 400
+            return jsonify({"error": "Provide 'categories', 'cluster_id', 'person', or 'folder'"}), 400
 
-    where, params = _photo_where(cluster_id_raw, cat_list, folder)
+    where, params = _photo_where(cluster_id_raw, cat_list, folder, person)
     params.extend([limit, offset])
 
     with get_conn() as conn, conn.cursor() as cur:
@@ -231,7 +309,7 @@ def photos() -> Any:
                    category_1, category_1_score,
                    category_2, category_2_score,
                    category_3, category_3_score,
-                   created_at
+                   person_names
             FROM photo_embeddings
             WHERE {where}
             ORDER BY id
@@ -295,6 +373,7 @@ def get_playlist_photos(playlist_id: int) -> Any:
                    pe.category_1, pe.category_1_score,
                    pe.category_2, pe.category_2_score,
                    pe.category_3, pe.category_3_score,
+                   pe.person_names,
                    pp.position
             FROM playlist_photos pp
             JOIN photo_embeddings pe ON pe.id = pp.photo_id
@@ -317,9 +396,10 @@ def get_playlist_photos(playlist_id: int) -> Any:
             "file_path": file_path,
             "file_name": Path(file_path).name,
             "categories": [c for c in cats if c["name"]],
+            "person_names": list(row[8]) if row[8] else [],
             "thumbnail_url": f"/image?id={photo_id}&thumb=1",
             "image_url": f"/image?id={photo_id}",
-            "position": int(row[8]),
+            "position": int(row[9]),
         })
     return jsonify(items)
 
@@ -434,6 +514,68 @@ def reorder_playlist_photos(playlist_id: int) -> Any:
 
         conn.commit()
     return jsonify({"ok": True})
+
+
+# ── Semantic search ───────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+def search_photos() -> Any:
+    query = request.args.get("query", "").strip()
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+    if len(query) > 600:
+        return jsonify({"error": "query too long (max 600 characters)"}), 400
+
+    limit  = min(max(int(request.args.get("limit",  50)), 1), 200)
+    offset = max(int(request.args.get("offset",  0)), 0)
+    folder = request.args.get("folder", "").strip()
+
+    try:
+        embedding = _embed_text(query)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 503
+
+    vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+    where_clauses: list[str] = ["embedding IS NOT NULL"]
+    base_params: list = []
+    if folder:
+        where_clauses.append("regexp_replace(file_path, '/[^/]+$', '') = %s")
+        base_params.append(folder)
+    base_params.append(vec_str)  # ORDER BY placeholder
+
+    where_sql = " AND ".join(where_clauses)
+
+    # ef_search must cover offset + all rows we want to inspect (limit+1 for has_more).
+    ef_search = max(100, offset + limit + 1)
+
+    with get_conn() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(f"SET LOCAL hnsw.ef_search = {ef_search}")
+        except Exception:
+            pass  # older pgvector / no HNSW index — proceed with default
+        cur.execute(
+            f"""
+            SELECT id, file_path,
+                   category_1, category_1_score,
+                   category_2, category_2_score,
+                   category_3, category_3_score,
+                   person_names
+            FROM photo_embeddings
+            WHERE {where_sql}
+            ORDER BY embedding <=> %s::vector ASC
+            LIMIT %s OFFSET %s
+            """,
+            [*base_params, limit + 1, offset],
+        )
+        rows = cur.fetchall()
+
+    items = _build_items(rows[:limit])
+    return jsonify({
+        "items": items,
+        "next_offset": offset + len(items),
+        "has_more": len(rows) > limit,
+    })
 
 
 # ── Image serving ─────────────────────────────────────────────────────────────
