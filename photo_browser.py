@@ -205,6 +205,46 @@ def people() -> Any:
     return jsonify([{"name": r[0], "count": int(r[1])} for r in rows])
 
 
+@app.get("/api/face_clusters")
+def face_clusters() -> Any:
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT fc.id, fc.description, fc.face_count,
+                       COUNT(DISTINCT fe.photo_id) AS photo_count
+                FROM face_clusters fc
+                LEFT JOIN face_embeddings fe ON fe.face_cluster_id = fc.id
+                GROUP BY fc.id, fc.description, fc.face_count
+                ORDER BY fc.face_count DESC
+                """
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return jsonify([])
+    return jsonify([
+        {"id": int(r[0]), "description": r[1], "face_count": int(r[2]), "photo_count": int(r[3])}
+        for r in rows
+    ])
+
+
+@app.patch("/api/face_clusters/<int:cluster_id>")
+def update_face_cluster(cluster_id: int) -> Any:
+    data = request.get_json(silent=True) or {}
+    description = str(data.get("description", "")).strip()
+    if not description:
+        return jsonify({"error": "description is required"}), 400
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE face_clusters SET description = %s WHERE id = %s RETURNING id",
+            (description, cluster_id),
+        )
+        if cur.fetchone() is None:
+            return jsonify({"error": "Face cluster not found"}), 404
+        conn.commit()
+    return jsonify({"id": cluster_id, "description": description})
+
+
 @app.patch("/api/clusters/<int:cluster_id>")
 def update_cluster(cluster_id: int) -> Any:
     data = request.get_json(silent=True) or {}
@@ -253,51 +293,100 @@ def _photo_where(
 @app.get("/api/folders")
 def folders() -> Any:
     """Return distinct parent folders, optionally scoped to the current filter."""
-    cluster_id_raw = request.args.get("cluster_id", "").strip()
+    cluster_id_raw      = request.args.get("cluster_id", "").strip()
+    face_cluster_id_raw = request.args.get("face_cluster_id", "").strip()
     cat_list = [c.strip() for c in request.args.getlist("categories") if c.strip()]
     cat_list = [c for c in cat_list if c in CATEGORY_LABELS]
     person = request.args.get("person", "").strip()
 
-    where, params = _photo_where(cluster_id_raw, cat_list, "", person)
-    where_sql = f"WHERE {where}" if where else ""
-
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT regexp_replace(file_path, '/[^/]+$', '') AS folder,
-                   COUNT(*) AS cnt
-            FROM photo_embeddings
-            {where_sql}
-            GROUP BY folder
-            ORDER BY folder
-            """,
-            params,
-        )
-        rows = cur.fetchall()
+    if face_cluster_id_raw and face_cluster_id_raw.isdigit():
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT regexp_replace(pe.file_path, '/[^/]+$', '') AS folder,
+                       COUNT(DISTINCT pe.id) AS cnt
+                FROM photo_embeddings pe
+                JOIN face_embeddings fe ON fe.photo_id = pe.id
+                WHERE fe.face_cluster_id = %s
+                GROUP BY folder
+                ORDER BY folder
+                """,
+                (int(face_cluster_id_raw),),
+            )
+            rows = cur.fetchall()
+    else:
+        where, params = _photo_where(cluster_id_raw, cat_list, "", person)
+        where_sql = f"WHERE {where}" if where else ""
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT regexp_replace(file_path, '/[^/]+$', '') AS folder,
+                       COUNT(*) AS cnt
+                FROM photo_embeddings
+                {where_sql}
+                GROUP BY folder
+                ORDER BY folder
+                """,
+                params,
+            )
+            rows = cur.fetchall()
     return jsonify([{"path": r[0], "count": int(r[1])} for r in rows])
 
 
 @app.get("/api/photos")
 def photos() -> Any:
-    limit = min(max(int(request.args.get("limit", 50)), 1), 200)
-    offset = max(int(request.args.get("offset", 0)), 0)
+    limit  = min(max(int(request.args.get("limit",  50)), 1), 200)
+    offset = max(int(request.args.get("offset",  0)), 0)
     folder = request.args.get("folder", "").strip()
 
-    cluster_id_raw = request.args.get("cluster_id", "").strip()
+    face_cluster_id_raw = request.args.get("face_cluster_id", "").strip()
+    cluster_id_raw      = request.args.get("cluster_id", "").strip()
     cat_list = [c.strip() for c in request.args.getlist("categories") if c.strip()]
-    person = request.args.get("person", "").strip()
+    person   = request.args.get("person", "").strip()
 
+    # ── Face cluster filter (requires JOIN on face_embeddings) ────────────────
+    if face_cluster_id_raw:
+        if not face_cluster_id_raw.isdigit():
+            return jsonify({"error": "Invalid face_cluster_id"}), 400
+        where_parts = ["fe.face_cluster_id = %s"]
+        params: list = [int(face_cluster_id_raw)]
+        if folder:
+            where_parts.append("regexp_replace(pe.file_path, '/[^/]+$', '') = %s")
+            params.append(folder)
+        where_sql = " AND ".join(where_parts)
+        params.extend([limit + 1, offset])
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT DISTINCT pe.id, pe.file_path,
+                       pe.category_1, pe.category_1_score,
+                       pe.category_2, pe.category_2_score,
+                       pe.category_3, pe.category_3_score,
+                       pe.person_names
+                FROM photo_embeddings pe
+                JOIN face_embeddings fe ON fe.photo_id = pe.id
+                WHERE {where_sql}
+                ORDER BY pe.id
+                LIMIT %s OFFSET %s
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+        items = _build_items(rows[:limit])
+        return jsonify({"items": items, "next_offset": offset + len(items), "has_more": len(rows) > limit})
+
+    # ── Standard filters ──────────────────────────────────────────────────────
     if cluster_id_raw:
         if not cluster_id_raw.isdigit():
             return jsonify({"error": "Invalid cluster_id"}), 400
     elif person:
-        pass  # valid filter — no extra validation needed
+        pass
     elif cat_list:
         if any(c not in CATEGORY_LABELS for c in cat_list):
             return jsonify({"error": "Unknown category"}), 400
     else:
         if not folder:
-            return jsonify({"error": "Provide 'categories', 'cluster_id', 'person', or 'folder'"}), 400
+            return jsonify({"error": "Provide 'categories', 'cluster_id', 'face_cluster_id', or 'folder'"}), 400
 
     where, params = _photo_where(cluster_id_raw, cat_list, folder, person)
     params.extend([limit, offset])
@@ -514,6 +603,161 @@ def reorder_playlist_photos(playlist_id: int) -> Any:
 
         conn.commit()
     return jsonify({"ok": True})
+
+
+# ── Same-person face search ───────────────────────────────────────────────────
+
+@app.get("/api/same_person")
+def same_person_photos() -> Any:
+    photo_id_raw = request.args.get("photo_id", "").strip()
+    if not photo_id_raw.isdigit():
+        return jsonify({"error": "photo_id non valido"}), 400
+    photo_id = int(photo_id_raw)
+
+    limit  = min(max(int(request.args.get("limit",  50)), 1), 200)
+    offset = max(int(request.args.get("offset",  0)), 0)
+    folder = request.args.get("folder", "").strip()
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT embedding FROM face_embeddings WHERE photo_id = %s ORDER BY face_index",
+            (photo_id,),
+        )
+        faces = cur.fetchall()
+
+    if len(faces) != 1:
+        return jsonify({"error": "La foto non ha una sola persona"}), 400
+
+    emb_raw = faces[0][0]
+    if isinstance(emb_raw, str):
+        vec_str = emb_raw
+    else:
+        vec_str = "[" + ",".join(str(float(x)) for x in emb_raw) + "]"
+
+    # Cosine distance threshold — lower = more restrictive (ArcFace buffalo_l)
+    THRESHOLD = 0.35
+
+    where_parts = ["pe.id != %s", "(fe.embedding <=> %s::vector) < %s"]
+    params: list = [photo_id, vec_str, THRESHOLD]
+
+    if folder:
+        where_parts.append("regexp_replace(pe.file_path, '/[^/]+$', '') = %s")
+        params.append(folder)
+
+    where_sql = " AND ".join(where_parts)
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT pe.id, pe.file_path,
+                   pe.category_1, pe.category_1_score,
+                   pe.category_2, pe.category_2_score,
+                   pe.category_3, pe.category_3_score,
+                   pe.person_names
+            FROM photo_embeddings pe
+            JOIN face_embeddings fe ON fe.photo_id = pe.id
+            WHERE {where_sql}
+            GROUP BY pe.id, pe.file_path,
+                     pe.category_1, pe.category_1_score,
+                     pe.category_2, pe.category_2_score,
+                     pe.category_3, pe.category_3_score,
+                     pe.person_names
+            ORDER BY MIN(fe.embedding <=> %s::vector) ASC
+            LIMIT %s OFFSET %s
+            """,
+            [*params, vec_str, limit + 1, offset],
+        )
+        rows = cur.fetchall()
+
+    items = _build_items(rows[:limit])
+    return jsonify({
+        "items": items,
+        "next_offset": offset + len(items),
+        "has_more": len(rows) > limit,
+    })
+
+
+@app.get("/api/same_person_similar")
+def same_person_similar_photos() -> Any:
+    photo_id_raw = request.args.get("photo_id", "").strip()
+    if not photo_id_raw.isdigit():
+        return jsonify({"error": "photo_id non valido"}), 400
+    photo_id = int(photo_id_raw)
+
+    limit  = min(max(int(request.args.get("limit",  50)), 1), 200)
+    offset = max(int(request.args.get("offset",  0)), 0)
+    folder = request.args.get("folder", "").strip()
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT embedding FROM face_embeddings WHERE photo_id = %s ORDER BY face_index",
+            (photo_id,),
+        )
+        faces = cur.fetchall()
+
+    if len(faces) != 1:
+        return jsonify({"error": "La foto non ha una sola persona"}), 400
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT embedding FROM photo_embeddings WHERE id = %s",
+            (photo_id,),
+        )
+        clip_row = cur.fetchone()
+
+    if not clip_row or clip_row[0] is None:
+        return jsonify({"error": "La foto non ha un embedding visivo"}), 400
+
+    def _to_vec(raw) -> str:
+        if isinstance(raw, str):
+            return raw
+        return "[" + ",".join(str(float(x)) for x in raw) + "]"
+
+    face_vec = _to_vec(faces[0][0])
+    clip_vec = _to_vec(clip_row[0])
+
+    FACE_THRESHOLD  = 0.35   # ArcFace cosine distance — very restrictive
+    PHOTO_THRESHOLD = 0.40   # CLIP cosine distance — visually similar
+
+    where_parts = ["pe.id != %s", "pe.embedding IS NOT NULL", "(pe.embedding <=> %s::vector) < %s"]
+    where_params: list = [photo_id, clip_vec, PHOTO_THRESHOLD]
+
+    if folder:
+        where_parts.append("regexp_replace(pe.file_path, '/[^/]+$', '') = %s")
+        where_params.append(folder)
+
+    where_sql = " AND ".join(where_parts)
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH face_matches AS (
+                SELECT photo_id, MIN(embedding <=> %s::vector) AS face_dist
+                FROM face_embeddings
+                WHERE (embedding <=> %s::vector) < %s
+                GROUP BY photo_id
+            )
+            SELECT pe.id, pe.file_path,
+                   pe.category_1, pe.category_1_score,
+                   pe.category_2, pe.category_2_score,
+                   pe.category_3, pe.category_3_score,
+                   pe.person_names
+            FROM photo_embeddings pe
+            JOIN face_matches fm ON fm.photo_id = pe.id
+            WHERE {where_sql}
+            ORDER BY fm.face_dist + (pe.embedding <=> %s::vector) ASC
+            LIMIT %s OFFSET %s
+            """,
+            [face_vec, face_vec, FACE_THRESHOLD, *where_params, clip_vec, limit + 1, offset],
+        )
+        rows = cur.fetchall()
+
+    items = _build_items(rows[:limit])
+    return jsonify({
+        "items": items,
+        "next_offset": offset + len(items),
+        "has_more": len(rows) > limit,
+    })
 
 
 # ── Semantic search ───────────────────────────────────────────────────────────

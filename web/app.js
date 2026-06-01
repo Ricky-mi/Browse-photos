@@ -1,9 +1,11 @@
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const modeCategoryBtn      = document.getElementById("modeCategory");
 const modeClusterBtn       = document.getElementById("modeCluster");
+const modeFaceClusterBtn   = document.getElementById("modeFaceCluster");
 const modeSearchBtn        = document.getElementById("modeSearch");
 const categoryControls     = document.getElementById("categoryControls");
 const clusterControls      = document.getElementById("clusterControls");
+const faceClusterControls  = document.getElementById("faceClusterControls");
 const searchControls       = document.getElementById("searchControls");
 const searchQueryEl        = document.getElementById("searchQuery");
 const searchBtn            = document.getElementById("searchBtn");
@@ -14,6 +16,10 @@ const clusterSelect        = document.getElementById("clusterSelect");
 const clusterDesc          = document.getElementById("clusterDesc");
 const saveClusterBtn       = document.getElementById("saveClusterBtn");
 const saveStatus           = document.getElementById("saveStatus");
+const faceClusterSelect    = document.getElementById("faceClusterSelect");
+const faceClusterDesc      = document.getElementById("faceClusterDesc");
+const saveFaceClusterBtn   = document.getElementById("saveFaceClusterBtn");
+const saveFaceClusterStatus= document.getElementById("saveFaceClusterStatus");
 const folderSelect         = document.getElementById("folderSelect");
 const folderCount          = document.getElementById("folderCount");
 const grid                 = document.getElementById("grid");
@@ -85,6 +91,10 @@ let selectedPlaylistId   = null;
 let selectedPlaylistName = "";
 let playlistPhotos       = [];
 
+// Same-person search state
+let samePersonSourceId   = null;
+let samePersonSourceName = "";
+
 // Slideshow state
 let ssPhotos  = [];
 let ssIndex   = 0;
@@ -117,6 +127,8 @@ function fmtScore(s) { return s != null ? s.toFixed(2) : "-"; }
 function getClusterId() { return clusterSelect.value ? parseInt(clusterSelect.value, 10) : null; }
 function lightboxOpen() { return !lightbox.classList.contains("hidden"); }
 
+function getFaceClusterId() { return faceClusterSelect.value ? parseInt(faceClusterSelect.value, 10) : null; }
+
 function stripPrefix(paths) {
   if (paths.length === 0) return [];
   const parts = paths.map((p) => p.split("/").filter(Boolean));
@@ -137,6 +149,9 @@ function primaryQS() {
   const qs = new URLSearchParams();
   if (mode === "category") {
     for (const cat of selectedCategories) qs.append("categories", cat);
+  } else if (mode === "face_cluster") {
+    const fcid = getFaceClusterId();
+    if (fcid) qs.set("face_cluster_id", String(fcid));
   } else {
     const cid = getClusterId();
     if (cid) qs.set("cluster_id", String(cid));
@@ -167,6 +182,51 @@ function hideContextMenu() {
 
 document.addEventListener("click", hideContextMenu);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
+
+// ── Same-person search ────────────────────────────────────────────────────────
+async function searchSamePerson(photo) {
+  samePersonSourceId   = photo.id;
+  samePersonSourceName = photo.file_name;
+  mode = "same_person";
+
+  modeCategoryBtn.classList.remove("active");
+  modeClusterBtn.classList.remove("active");
+  modeFaceClusterBtn.classList.remove("active");
+  modeSearchBtn.classList.remove("active");
+
+  categoryControls.classList.add("hidden");
+  clusterControls.classList.add("hidden");
+  faceClusterControls.classList.add("hidden");
+  searchControls.classList.add("hidden");
+
+  selectedFolder = "";
+  folderSelect.value = "";
+  statusEl.textContent = "Ricerca in corso…";
+
+  await Promise.all([loadFolders(), loadPhotos({ reset: true })]);
+}
+
+async function searchSamePersonSimilar(photo) {
+  samePersonSourceId   = photo.id;
+  samePersonSourceName = photo.file_name;
+  mode = "same_person_similar";
+
+  modeCategoryBtn.classList.remove("active");
+  modeClusterBtn.classList.remove("active");
+  modeFaceClusterBtn.classList.remove("active");
+  modeSearchBtn.classList.remove("active");
+
+  categoryControls.classList.add("hidden");
+  clusterControls.classList.add("hidden");
+  faceClusterControls.classList.add("hidden");
+  searchControls.classList.add("hidden");
+
+  selectedFolder = "";
+  folderSelect.value = "";
+  statusEl.textContent = "Ricerca in corso…";
+
+  await Promise.all([loadFolders(), loadPhotos({ reset: true })]);
+}
 
 // ── Playlist API ───────────────────────────────────────────────────────────────
 async function apiGetPlaylists() {
@@ -573,7 +633,7 @@ slideshowOverlay.addEventListener("keydown", (e) => {
 
 // ── Folder filter ─────────────────────────────────────────────────────────────
 async function loadFolders() {
-  const qs = mode === "search" ? new URLSearchParams() : primaryQS();
+  const qs = (mode === "search" || mode === "same_person" || mode === "same_person_similar") ? new URLSearchParams() : primaryQS();
   const resp = await fetch(`/api/folders?${qs}`).catch(() => null);
   if (!resp || !resp.ok) return;
   const data = await resp.json();
@@ -643,14 +703,25 @@ function renderCard(photo) {
   card.appendChild(img);
   card.appendChild(meta);
 
-  // Right-click to add to selected playlist
+  // Right-click context menu
   card.addEventListener("contextmenu", (e) => {
-    if (!selectedPlaylistId) return;
     e.preventDefault();
-    showContextMenu(e, [{
-      label: `Add to "${selectedPlaylistName}"`,
-      handler: () => apiAddPhotoToPlaylist(selectedPlaylistId, photo.id),
-    }]);
+    const actions = [];
+    if (selectedPlaylistId) {
+      actions.push({
+        label: `Add to "${selectedPlaylistName}"`,
+        handler: () => apiAddPhotoToPlaylist(selectedPlaylistId, photo.id),
+      });
+    }
+    actions.push({
+      label: "Foto della stessa persona",
+      handler: () => searchSamePerson(photo),
+    });
+    actions.push({
+      label: "Foto simili della stessa persona",
+      handler: () => searchSamePersonSimilar(photo),
+    });
+    showContextMenu(e, actions);
   });
 
   return card;
@@ -675,6 +746,10 @@ async function loadPhotos({ reset = false } = {}) {
     statusEl.textContent = "No clusters available.";
     return;
   }
+  if (mode === "face_cluster" && !getFaceClusterId()) {
+    statusEl.textContent = "No face clusters available.";
+    return;
+  }
   if (mode === "search" && !searchQueryEl.value.trim()) {
     statusEl.textContent = "Enter a description and click Search.";
     return;
@@ -686,6 +761,12 @@ async function loadPhotos({ reset = false } = {}) {
   if (mode === "search") {
     apiUrl = "/api/search";
     qs.set("query", searchQueryEl.value.trim());
+  } else if (mode === "same_person") {
+    apiUrl = "/api/same_person";
+    qs.set("photo_id", String(samePersonSourceId));
+  } else if (mode === "same_person_similar") {
+    apiUrl = "/api/same_person_similar";
+    qs.set("photo_id", String(samePersonSourceId));
   } else {
     apiUrl = "/api/photos";
     for (const [k, v] of primaryQS()) qs.append(k, v);
@@ -700,7 +781,12 @@ async function loadPhotos({ reset = false } = {}) {
   const resp = await fetch(`${apiUrl}?${qs}`);
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    statusEl.textContent = `Error: ${err.error || resp.statusText}`;
+    if (mode === "same_person" || mode === "same_person_similar") {
+      showToast(err.error || "Errore nella ricerca", "warn");
+      statusEl.textContent = "";
+    } else {
+      statusEl.textContent = `Error: ${err.error || resp.statusText}`;
+    }
     return;
   }
   const data = await resp.json();
@@ -722,9 +808,17 @@ async function loadPhotos({ reset = false } = {}) {
     parts.push([...selectedCategories].join(" + "));
   } else if (mode === "cluster") {
     parts.push(clusterSelect.options[clusterSelect.selectedIndex]?.text ?? "");
+  } else if (mode === "face_cluster") {
+    parts.push(faceClusterSelect.options[faceClusterSelect.selectedIndex]?.text ?? "");
   } else if (mode === "search") {
     const q = searchQueryEl.value.trim();
     parts.push(`"${q.length > 60 ? q.slice(0, 60) + "…" : q}"`);
+  } else if (mode === "same_person") {
+    const n = samePersonSourceName;
+    parts.push(`stessa persona di "${n.length > 40 ? n.slice(0, 40) + "…" : n}"`);
+  } else if (mode === "same_person_similar") {
+    const n = samePersonSourceName;
+    parts.push(`stessa persona · foto simili di "${n.length > 40 ? n.slice(0, 40) + "…" : n}"`);
   }
   if (selectedFolder) {
     parts.push(folderSelect.options[folderSelect.selectedIndex]?.text ?? selectedFolder);
@@ -787,15 +881,28 @@ lightbox.addEventListener("click", (e) => {
 });
 closeLightbox.addEventListener("click", closeLightboxFn);
 
-// Right-click on lightbox image → add to playlist
+// Right-click on lightbox image
 lightboxImage.addEventListener("contextmenu", (e) => {
-  if (!selectedPlaylistId || currentPhotoIndex < 0) return;
+  if (currentPhotoIndex < 0) return;
   e.preventDefault();
   e.stopPropagation();
-  showContextMenu(e, [{
-    label: `Add to "${selectedPlaylistName}"`,
-    handler: () => apiAddPhotoToPlaylist(selectedPlaylistId, photoList[currentPhotoIndex].id),
-  }]);
+  const photo = photoList[currentPhotoIndex];
+  const actions = [];
+  if (selectedPlaylistId) {
+    actions.push({
+      label: `Add to "${selectedPlaylistName}"`,
+      handler: () => apiAddPhotoToPlaylist(selectedPlaylistId, photo.id),
+    });
+  }
+  actions.push({
+    label: "Foto della stessa persona",
+    handler: () => { closeLightboxFn(); searchSamePerson(photo); },
+  });
+  actions.push({
+    label: "Foto simili della stessa persona",
+    handler: () => { closeLightboxFn(); searchSamePersonSimilar(photo); },
+  });
+  showContextMenu(e, actions);
 });
 
 window.addEventListener("keydown", async (e) => {
@@ -918,6 +1025,82 @@ function updateCategoryChipStates() {
   }
 }
 
+// ── Face Cluster mode ─────────────────────────────────────────────────────────
+async function loadFaceClusters() {
+  const resp = await fetch("/api/face_clusters");
+  if (!resp.ok) throw new Error("Failed to load face clusters");
+  const clusters = await resp.json();
+
+  faceClusterSelect.innerHTML = "";
+  if (clusters.length === 0) {
+    const opt = document.createElement("option");
+    opt.textContent = "No face clusters — run cluster_faces.py first";
+    faceClusterSelect.appendChild(opt);
+    faceClusterDesc.value = "";
+    return;
+  }
+
+  for (const c of clusters) {
+    const opt = document.createElement("option");
+    opt.value = String(c.id);
+    opt.textContent = `${c.description} (${c.face_count} faces · ${c.photo_count} photos)`;
+    faceClusterSelect.appendChild(opt);
+  }
+
+  syncFaceClusterDesc();
+  selectedFolder = "";
+  await Promise.all([loadFolders(), loadPhotos({ reset: true })]);
+}
+
+function syncFaceClusterDesc() {
+  const sel = faceClusterSelect.options[faceClusterSelect.selectedIndex];
+  if (!sel) return;
+  faceClusterDesc.value = sel.text.replace(/\s*\(\d.*\)$/, "");
+  clearFaceClusterSaveStatus();
+}
+
+function clearFaceClusterSaveStatus() {
+  saveFaceClusterStatus.textContent = "";
+  saveFaceClusterStatus.className = "save-status";
+}
+
+faceClusterSelect.addEventListener("change", async () => {
+  syncFaceClusterDesc();
+  await Promise.all([loadFolders(), loadPhotos({ reset: true })]);
+});
+
+saveFaceClusterBtn.addEventListener("click", async () => {
+  const fcid = getFaceClusterId();
+  if (!fcid) return;
+  const desc = faceClusterDesc.value.trim();
+  if (!desc) return;
+
+  saveFaceClusterBtn.disabled = true;
+  clearFaceClusterSaveStatus();
+
+  const resp = await fetch(`/api/face_clusters/${fcid}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description: desc }),
+  });
+
+  saveFaceClusterBtn.disabled = false;
+
+  if (resp.ok) {
+    const opt = faceClusterSelect.options[faceClusterSelect.selectedIndex];
+    const m = opt.text.match(/\(.*\)$/);
+    opt.text = `${desc}${m ? " " + m[0] : ""}`;
+    saveFaceClusterStatus.textContent = "Saved";
+    saveFaceClusterStatus.className = "save-status ok";
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(clearFaceClusterSaveStatus, 3000);
+  } else {
+    const err = await resp.json().catch(() => ({}));
+    saveFaceClusterStatus.textContent = err.error || "Save failed";
+    saveFaceClusterStatus.className = "save-status err";
+  }
+});
+
 // ── Cluster mode ──────────────────────────────────────────────────────────────
 async function loadClusters() {
   const resp = await fetch("/api/clusters");
@@ -996,17 +1179,22 @@ saveClusterBtn.addEventListener("click", async () => {
 
 // ── Mode switching ────────────────────────────────────────────────────────────
 async function switchMode(newMode) {
+  samePersonSourceId   = null;
+  samePersonSourceName = "";
   mode = newMode;
-  const isCat     = newMode === "category";
-  const isCluster = newMode === "cluster";
-  const isSearch  = newMode === "search";
+  const isCat        = newMode === "category";
+  const isCluster    = newMode === "cluster";
+  const isFaceCluster= newMode === "face_cluster";
+  const isSearch     = newMode === "search";
 
-  modeCategoryBtn.classList.toggle("active", isCat);
-  modeClusterBtn.classList.toggle("active",  isCluster);
-  modeSearchBtn.classList.toggle("active",   isSearch);
-  categoryControls.classList.toggle("hidden", !isCat);
-  clusterControls.classList.toggle("hidden",  !isCluster);
-  searchControls.classList.toggle("hidden",   !isSearch);
+  modeCategoryBtn.classList.toggle("active",    isCat);
+  modeClusterBtn.classList.toggle("active",     isCluster);
+  modeFaceClusterBtn.classList.toggle("active", isFaceCluster);
+  modeSearchBtn.classList.toggle("active",      isSearch);
+  categoryControls.classList.toggle("hidden",    !isCat);
+  clusterControls.classList.toggle("hidden",     !isCluster);
+  faceClusterControls.classList.toggle("hidden", !isFaceCluster);
+  searchControls.classList.toggle("hidden",      !isSearch);
 
   selectedFolder = "";
   photoList  = [];
@@ -1022,15 +1210,19 @@ async function switchMode(newMode) {
   } else if (isCluster) {
     statusEl.textContent = "Loading…";
     loadClusters();
+  } else if (isFaceCluster) {
+    statusEl.textContent = "Loading…";
+    loadFaceClusters();
   } else {
     statusEl.textContent = "Enter a description and click Search.";
     await loadFolders();
   }
 }
 
-modeCategoryBtn.addEventListener("click", () => { if (mode !== "category") switchMode("category"); });
-modeClusterBtn.addEventListener("click",  () => { if (mode !== "cluster")  switchMode("cluster"); });
-modeSearchBtn.addEventListener("click",   () => { if (mode !== "search")   switchMode("search"); });
+modeCategoryBtn.addEventListener("click",    () => { if (mode !== "category")     switchMode("category"); });
+modeClusterBtn.addEventListener("click",     () => { if (mode !== "cluster")      switchMode("cluster"); });
+modeFaceClusterBtn.addEventListener("click", () => { if (mode !== "face_cluster") switchMode("face_cluster"); });
+modeSearchBtn.addEventListener("click",      () => { if (mode !== "search")       switchMode("search"); });
 
 // ── Search ────────────────────────────────────────────────────────────────────
 searchQueryEl.addEventListener("input", () => {

@@ -12,8 +12,9 @@
       <h1>Photo Browser</h1>
       <div class="mode-tabs">
         <button id="modeCategory" class="tab active" type="button">By Category</button>
-        <button id="modeCluster"  class="tab"        type="button">By Cluster</button>
-        <button id="modeSearch"   class="tab"        type="button">Search</button>
+        <button id="modeCluster"     class="tab" type="button">By Cluster</button>
+        <button id="modeFaceCluster" class="tab" type="button">Face Clusters</button>
+        <button id="modeSearch"      class="tab" type="button">Search</button>
       </div>
     </header>
 
@@ -36,6 +37,20 @@
       <div class="search-meta">
         <span id="searchCharCount" class="hint">0 / 600</span>
         <span class="hint">Enter to search &middot; Shift+Enter for new line</span>
+      </div>
+    </section>
+
+    <!-- Face Cluster mode controls -->
+    <section id="faceClusterControls" class="controls-panel hidden">
+      <div class="cluster-row">
+        <label for="faceClusterSelect">Face Cluster</label>
+        <select id="faceClusterSelect"></select>
+      </div>
+      <div class="cluster-row">
+        <label for="faceClusterDesc">Name</label>
+        <input id="faceClusterDesc" type="text" placeholder="Face cluster description" />
+        <button id="saveFaceClusterBtn" type="button">Save</button>
+        <span id="saveFaceClusterStatus" class="save-status"></span>
       </div>
     </section>
 
