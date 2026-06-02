@@ -25,6 +25,7 @@ const folderCount          = document.getElementById("folderCount");
 const grid                 = document.getElementById("grid");
 const statusEl             = document.getElementById("status");
 const loadMoreBtn          = document.getElementById("loadMoreBtn");
+const slideshowViewBtn     = document.getElementById("slideshowViewBtn");
 const lightbox             = document.getElementById("lightbox");
 const lightboxImage        = document.getElementById("lightboxImage");
 const lightboxCaption      = document.getElementById("lightboxCaption");
@@ -632,6 +633,60 @@ slideshowOverlay.addEventListener("keydown", (e) => {
   if (e.key === "Escape") stopSlideshow();
 });
 
+// ── Slideshow from current filter view ───────────────────────────────────────
+async function fetchAllPhotosForSlideshow() {
+  let offset = 0;
+  const BATCH = 200;
+  const all = [];
+
+  while (true) {
+    const qs = new URLSearchParams();
+    let apiUrl;
+
+    if (mode === "search") {
+      apiUrl = "/api/search";
+      qs.set("query", searchQueryEl.value.trim());
+    } else if (mode === "same_person") {
+      apiUrl = "/api/same_person";
+      qs.set("photo_id", String(samePersonSourceId));
+    } else if (mode === "same_person_similar") {
+      apiUrl = "/api/same_person_similar";
+      qs.set("photo_id", String(samePersonSourceId));
+    } else {
+      apiUrl = "/api/photos";
+      for (const [k, v] of primaryQS()) qs.append(k, v);
+    }
+
+    qs.set("offset", String(offset));
+    qs.set("limit", String(BATCH));
+    if (selectedFolder) qs.set("folder", selectedFolder);
+
+    const resp = await fetch(`${apiUrl}?${qs}`);
+    if (!resp.ok) break;
+    const data = await resp.json();
+
+    all.push(...data.items);
+    if (!data.has_more) break;
+    offset = data.next_offset;
+  }
+
+  return all;
+}
+
+slideshowViewBtn.addEventListener("click", async () => {
+  slideshowViewBtn.disabled = true;
+  slideshowViewBtn.textContent = "Loading…";
+  try {
+    const photos = await fetchAllPhotosForSlideshow();
+    if (photos.length === 0) { showToast("No photos to show", "warn"); return; }
+    ssPhotos = photos;
+    startSlideshow();
+  } finally {
+    slideshowViewBtn.disabled = photoList.length === 0;
+    slideshowViewBtn.textContent = "▶ Slideshow all";
+  }
+});
+
 // ── Folder filter ─────────────────────────────────────────────────────────────
 async function loadFolders() {
   const qs = (mode === "search" || mode === "same_person" || mode === "same_person_similar") ? new URLSearchParams() : primaryQS();
@@ -735,6 +790,7 @@ async function loadPhotos({ reset = false } = {}) {
     hasMore    = false;
     photoList  = [];
     grid.innerHTML = "";
+    slideshowViewBtn.disabled = true;
   }
 
   loadMoreBtn.disabled = true;
@@ -800,9 +856,10 @@ async function loadPhotos({ reset = false } = {}) {
     grid.appendChild(card);
   }
 
-  nextOffset           = data.next_offset;
-  hasMore              = data.has_more;
-  loadMoreBtn.disabled = !hasMore;
+  nextOffset                = data.next_offset;
+  hasMore                   = data.has_more;
+  loadMoreBtn.disabled      = !hasMore;
+  slideshowViewBtn.disabled = photoList.length === 0;
 
   const parts = [];
   if (mode === "category" && selectedCategories.size > 0) {

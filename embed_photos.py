@@ -84,38 +84,140 @@ def get_db_url() -> str:
 
 def init_db(conn) -> None:
     with conn.cursor() as cur:
+        # ── Extensions ────────────────────────────────────────────────────────
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.commit()
         logger.info("Extension vector created/enabled")
 
+        # ── Core photo table ──────────────────────────────────────────────────
         cur.execute("""
             CREATE TABLE IF NOT EXISTS photo_embeddings (
-                id BIGSERIAL PRIMARY KEY,
-                file_path TEXT NOT NULL UNIQUE,
-                embedding vector(512) NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
+                id            BIGSERIAL PRIMARY KEY,
+                file_path     TEXT NOT NULL UNIQUE,
+                embedding     vector(512) NOT NULL,
+                created_at    TIMESTAMPTZ DEFAULT NOW()
             )
         """)
-        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_1 TEXT")
+        # CLIP classification columns
+        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_1       TEXT")
         cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_1_score REAL")
-        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_2 TEXT")
+        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_2       TEXT")
         cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_2_score REAL")
-        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_3 TEXT")
+        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_3       TEXT")
         cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS category_3_score REAL")
-        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS classified_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS classified_at    TIMESTAMPTZ")
+        # Photo cluster column (cluster_photos.py)
+        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS cluster_id       INTEGER")
+        # Face detection flag (detect_faces.py)
+        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS has_faces        BOOLEAN")
+        # Named-person tags (photo_browser.py / embed_faces.py)
+        cur.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS person_names     TEXT[]")
         conn.commit()
         logger.info("Table photo_embeddings created/verified")
 
+        # ── HNSW index on CLIP embeddings ─────────────────────────────────────
         try:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS photo_embeddings_embedding_idx
                 ON photo_embeddings USING hnsw (embedding vector_cosine_ops)
             """)
             conn.commit()
-            logger.info("HNSW index created/verified")
+            logger.info("HNSW index on photo_embeddings created/verified")
         except Exception as e:
             conn.rollback()
-            logger.warning("Index creation skipped (may already exist): %s", e)
+            logger.warning("HNSW index skipped (may already exist): %s", e)
+
+        # ── Photo clusters (cluster_photos.py) ────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS clusters (
+                id          INTEGER PRIMARY KEY,
+                description TEXT NOT NULL
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS photo_embeddings_cluster_id_idx "
+            "ON photo_embeddings (cluster_id)"
+        )
+        conn.commit()
+        logger.info("Table clusters created/verified")
+
+        # ── Face embeddings (embed_faces.py) ──────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS face_embeddings (
+                id          SERIAL PRIMARY KEY,
+                photo_id    INTEGER NOT NULL
+                                REFERENCES photo_embeddings(id) ON DELETE CASCADE,
+                face_index  SMALLINT NOT NULL,
+                embedding   vector(512),
+                bbox_x1     REAL,
+                bbox_y1     REAL,
+                bbox_x2     REAL,
+                bbox_y2     REAL,
+                det_score   REAL,
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(photo_id, face_index)
+            )
+        """)
+        try:
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS face_embeddings_hnsw
+                ON face_embeddings USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+            """)
+            conn.commit()
+            logger.info("Table face_embeddings and HNSW index created/verified")
+        except Exception as e:
+            conn.rollback()
+            logger.warning("HNSW index on face_embeddings skipped (may already exist): %s", e)
+
+        # ── Face clusters (cluster_faces.py) ──────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS face_clusters (
+                id          INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                face_count  INTEGER DEFAULT 0
+            )
+        """)
+        cur.execute(
+            "ALTER TABLE face_embeddings "
+            "ADD COLUMN IF NOT EXISTS face_cluster_id INTEGER REFERENCES face_clusters(id)"
+        )
+        conn.commit()
+        logger.info("Table face_clusters created/verified")
+
+        # ── Known people (photo_browser.py) ───────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS known_people (
+                id            SERIAL PRIMARY KEY,
+                name          TEXT NOT NULL UNIQUE,
+                reference_dir TEXT,
+                photo_count   INTEGER DEFAULT 0
+            )
+        """)
+        conn.commit()
+        logger.info("Table known_people created/verified")
+
+        # ── Playlists (photo_browser.py) ──────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS playlists (
+                id         SERIAL PRIMARY KEY,
+                name       TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS playlist_photos (
+                id          SERIAL PRIMARY KEY,
+                playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                photo_id    INTEGER NOT NULL REFERENCES photo_embeddings(id) ON DELETE CASCADE,
+                prev_id     INTEGER,
+                next_id     INTEGER,
+                position    INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(playlist_id, photo_id)
+            )
+        """)
+        conn.commit()
+        logger.info("Tables playlists / playlist_photos created/verified")
 
 
 def collect_image_paths(root: Path) -> list[Path]:
