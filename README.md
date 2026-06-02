@@ -2,10 +2,12 @@
 
 > A self-hosted photo library with AI-powered semantic search, face recognition, and automatic categorisation. Runs entirely on your own machine — no cloud, no subscriptions.
 
-<!-- Replace the paths below with real screenshots once the app is running -->
-<!-- ![Browse by category](screenshots/browse-categories.png) -->
-<!-- ![Semantic search](screenshots/semantic-search.png) -->
-<!-- ![Face clusters](screenshots/face-clusters.png) -->
+## Screenshots
+
+![Browse by category](Screenshots/Browse-categories.jpeg)
+![Semantic search](Screenshots/Semantic-search.jpeg)
+![Face clusters](Screenshots/Face-clusters.jpeg)
+![Slide Show](Screenshots/Slide-Show-All.jpeg)
 
 ---
 
@@ -20,14 +22,6 @@
 - **Slideshow** — play any playlist or the full result of any active filter as a fullscreen slideshow; adjustable speed, keyboard controls
 - **Folder filter** — always-visible dropdown scopes any view to a subfolder
 - **No cloud** — all vectors stored in PostgreSQL with [pgvector](https://github.com/pgvector/pgvector); images never leave your machine
-
----
-
-## Screenshots
-
-> Add screenshots to a `screenshots/` folder and uncomment the image tags above.
->
-> Suggested shots: category browse grid · semantic search results · face cluster view · lightbox with zoom · slideshow · playlist modal
 
 ---
 
