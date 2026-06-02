@@ -27,6 +27,7 @@ const statusEl             = document.getElementById("status");
 const loadMoreBtn          = document.getElementById("loadMoreBtn");
 const lightbox             = document.getElementById("lightbox");
 const lightboxImage        = document.getElementById("lightboxImage");
+const lightboxCaption      = document.getElementById("lightboxCaption");
 const prevBtn              = document.getElementById("prevPhoto");
 const nextBtn              = document.getElementById("nextPhoto");
 const closeLightbox        = document.getElementById("closeLightbox");
@@ -827,6 +828,15 @@ async function loadPhotos({ reset = false } = {}) {
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
+function folderName(filePath) {
+  const parts = (filePath || "").split("/").filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 2] : "";
+}
+
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && lightboxOpen()) closeLightboxFn();
+});
+
 function applyLightboxTransform() {
   lightboxImage.style.transform =
     `translate(${lightboxTranslateX}px, ${lightboxTranslateY}px) scale(${lightboxScale})`;
@@ -841,6 +851,14 @@ function openLightbox(index) {
   applyLightboxTransform();
   lightboxImage.src = photoList[index].image_url;
   lightbox.classList.remove("hidden");
+  const folder = folderName(photoList[index].file_path || "");
+  if (folder) {
+    lightboxCaption.textContent = folder;
+    lightboxCaption.classList.remove("hidden");
+  } else {
+    lightboxCaption.classList.add("hidden");
+  }
+  if (lightbox.requestFullscreen) lightbox.requestFullscreen().catch(() => {});
   updateNavButtons();
 }
 
@@ -851,7 +869,9 @@ function closeLightboxFn() {
   lightboxTranslateX = 0;
   lightboxTranslateY = 0;
   lightboxImage.style.cursor = "";
+  lightboxCaption.classList.add("hidden");
   applyLightboxTransform();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
 
 function updateNavButtons() {

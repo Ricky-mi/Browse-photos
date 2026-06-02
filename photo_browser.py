@@ -18,15 +18,19 @@ from PIL import Image, ImageOps
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5433/photos"
 CATEGORY_LABELS = [
-    "Ritratti & Gruppi",
-    "Panorami Naturali",
-    "Mare & Coste",
-    "Montagne & Rocce",
-    "Urban & Architettura",
-    "Natura da vicino",
-    "Animali",
-    "Food & Drink",
-    "Interni & Musei",
+    "Portrait (1-3 persons)",
+    "Photo by night",
+    "Summer beach landscape",
+    "Summer mountain landscape",
+    "Winter mountain landscape",
+    "Autumn",
+    "Flowers",
+    "Macrophotography",
+    "Nature",
+    "Trees",
+    "Urban photos of cities and small towns",
+    "Ancient Italian cities",
+    "Car, motorcycles, bikes",
     "Other",
 ]
 
@@ -262,6 +266,29 @@ def update_cluster(cluster_id: int) -> Any:
     return jsonify({"id": cluster_id, "description": description})
 
 
+def _category_order_by(cat_list: list[str]) -> tuple[str, list]:
+    """Return (ORDER BY expression, params) sorting by stored category score DESC.
+
+    For each category in cat_list, look up the score from whichever slot
+    (category_1/2/3) holds that label and sum them. Photos that score
+    highest across all selected categories come first.
+    Fallback: ORDER BY id ASC when no category filter is active.
+    """
+    if not cat_list:
+        return "id ASC", []
+    parts = []
+    params: list = []
+    for cat in cat_list:
+        parts.append(
+            "(CASE WHEN category_1=%s THEN COALESCE(category_1_score,0)"
+            " WHEN category_2=%s THEN COALESCE(category_2_score,0)"
+            " WHEN category_3=%s THEN COALESCE(category_3_score,0)"
+            " ELSE 0 END)"
+        )
+        params += [cat, cat, cat]
+    return " + ".join(parts) + " DESC", params
+
+
 def _photo_where(
     cluster_id_raw: str,
     cat_list: list[str],
@@ -388,8 +415,9 @@ def photos() -> Any:
         if not folder:
             return jsonify({"error": "Provide 'categories', 'cluster_id', 'face_cluster_id', or 'folder'"}), 400
 
-    where, params = _photo_where(cluster_id_raw, cat_list, folder, person)
-    params.extend([limit, offset])
+    where, where_params = _photo_where(cluster_id_raw, cat_list, folder, person)
+    order_sql, order_params = _category_order_by(cat_list if not cluster_id_raw and not person else [])
+    params = where_params + order_params + [limit, offset]
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -401,7 +429,7 @@ def photos() -> Any:
                    person_names
             FROM photo_embeddings
             WHERE {where}
-            ORDER BY id
+            ORDER BY {order_sql}
             LIMIT %s OFFSET %s
             """,
             params,

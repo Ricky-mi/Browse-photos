@@ -30,43 +30,59 @@ CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
 FETCH_BATCH = 500   # rows fetched per SELECT
 COMMIT_EVERY = 200  # rows updated per COMMIT
 
-# Italian display labels paired with English CLIP prompts.
+# Display labels paired with English CLIP prompts.
 CATEGORIES: list[tuple[str, str]] = [
     (
-        "Ritratti & Gruppi",
-        "a portrait or group photo: close-ups, selfies, posed or candid photos of people",
+        "Portrait (1-3 persons)",
+        "a portrait photograph showing one, two, or three people with visible faces or upper bodies",
     ),
     (
-        "Panorami Naturali",
-        "a natural landscape: wide open spaces, forests, lakes, sunsets and skies",
+        "Photo by night",
+        "a photograph taken at nighttime with dark sky, artificial lights, street lights, or stars",
     ),
     (
-        "Mare & Coste",
-        "sea and coast: beaches, cliffs, boats and sea water reflections",
+        "Summer beach landscape",
+        "a sunny summer beach scene with sea or ocean water, sand, and coastline",
     ),
     (
-        "Montagne & Rocce",
-        "mountains and rocks: peaks, snow, trails and high-altitude landscapes",
+        "Summer mountain landscape",
+        "a summer mountain landscape with green grass, trees, and rocky peaks under blue sky",
     ),
     (
-        "Urban & Architettura",
-        "urban scene and architecture: cities, monuments, streets, facades and urban geometry",
+        "Winter mountain landscape",
+        "a winter mountain landscape with snow-covered slopes or frozen alpine scenery",
     ),
     (
-        "Natura da vicino",
-        "close-up nature: flowers, plants, leaves, mushrooms and macro photography details",
+        "Autumn",
+        "an autumn or fall scene with orange, red, and yellow leaves, foliage, or seasonal colors",
     ),
     (
-        "Animali",
-        "animals: dogs, cats, wildlife or insects",
+        "Flowers",
+        "a close-up or garden photo of flowers, petals, blossoms, or a flower garden",
     ),
     (
-        "Food & Drink",
-        "food and drink: prepared dishes, coffee, table settings and culinary details",
+        "Macrophotography",
+        "an extreme close-up macro photograph revealing fine details of tiny objects like insects, water drops, or textures",
     ),
     (
-        "Interni & Musei",
-        "indoors and museums: rooms, interior design, exhibitions and indoor spaces",
+        "Nature",
+        "a natural landscape with forests, meadows, rivers, lakes, or open countryside without people",
+    ),
+    (
+        "Trees",
+        "a photo centered on trees, a forest, woodland, or tall trees against the sky",
+    ),
+    (
+        "Urban photos of cities and small towns",
+        "urban photography of a city or small town with streets, buildings, shops, and contemporary architecture",
+    ),
+    (
+        "Ancient Italian cities",
+        "an ancient Italian city with historic architecture, old piazzas, churches, monuments, or medieval streets",
+    ),
+    (
+        "Car, motorcycles, bikes",
+        "a photo featuring a car, motorcycle, bicycle, or other motor vehicle on a road",
     ),
 ]
 CATEGORY_OTHER = "Other"

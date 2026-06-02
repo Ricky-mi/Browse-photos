@@ -394,6 +394,24 @@ button[disabled] { opacity: 0.4; cursor: not-allowed; }
   white-space: nowrap;
 }
 
+/* ── Lightbox folder caption ─────────────────────────────────────────────────── */
+.lightbox-caption {
+  position: fixed;
+  bottom: 18px;
+  left: 18px;
+  background: rgba(0, 0, 0, 0.50);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 99px;
+  pointer-events: none;
+  z-index: 1001;
+  white-space: nowrap;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Context menu ────────────────────────────────────────────────────────────── */
 .context-menu {
   position: fixed;
